@@ -4,8 +4,7 @@ import sys
 from ydata_profiling import ProfileReport
 import pickle
 from sklearn.model_selection import train_test_split, GridSearchCV                      
-from sklearn.preprocessing import StandardScaler, MinMaxScaler, MaxAbsScaler, RobustScaler, Normalizer, QuantileTransformer, PowerTransformer,LabelEncoder, OrdinalEncoder
-
+from sklearn.preprocessing import StandardScaler, MinMaxScaler, MaxAbsScaler, RobustScaler, Normalizer, QuantileTransformer, PowerTransformer,LabelEncoder, OrdinalEncoder, OneHotEncoder
 from sklearn.decomposition import PCA
 from sklearn.linear_model import LogisticRegression,LinearRegression
 from sklearn.ensemble import RandomForestClassifier
@@ -14,6 +13,9 @@ from sklearn.neural_network import MLPClassifier
 from sklearn.metrics import mean_squared_error, mean_absolute_error, accuracy_score, f1_score
 import seaborn as sns 
 import matplotlib.pyplot as plt 
+from scipy.stats import boxcox, yeojohnson
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
 
 test_size = 0.2
 missing_handler_num = 0
@@ -97,19 +99,19 @@ outlier = outlier_handler[outlier_num]
 if outlier == 'trimming':
     lower_percent = 3   ############# to make dynamic ###############
     upper_percent = 97  ############# to make dynamic ###############
-    lower_bound = np.percentile(data, lower_percent, axis=0)
-    upper_bound = np.percentile(data, upper_percent, axis=0)
-    X_scaled = np.clip(data, lower_bound, upper_bound)
+    lower_bound = np.percentile(numerical_Data, lower_percent, axis=0)
+    upper_bound = np.percentile(numerical_Data, upper_percent, axis=0)
+    numerical_Data = np.clip(numerical_Data, lower_bound, upper_bound)
 
 elif outlier == 'capping':
-    lower_bound = data.mean() - 3 * data.std()
-    upper_bound = data.mean() + 3 * data.std()
-    X_scaled = np.clip(data, lower_bound, upper_bound)
+    lower_bound = numerical_Data.mean() - 3 * numerical_Data.std()
+    upper_bound = numerical_Data.mean() + 3 * numerical_Data.std()
+    X_scaled = np.clip(numerical_Data, lower_bound, upper_bound)
 
 elif outlier == 'change_to_mean':
-    x_mean = np.mean(data, axis=0)
-    X_scaled = np.where((data < x_mean - 3 * data.std()) | (data > x_mean + 3 * data.std()),
-                        x_mean, data)
+    x_mean = np.mean(numerical_Data, axis=0)
+    numerical_Data = np.where((numerical_Data < x_mean - 3 * numerical_Data.std()) | (numerical_Data > x_mean + 3 * numerical_Data.std()),
+                        x_mean, numerical_Data)
     
 elif outlier=='IQR_trim':
     Q1 = numerical_Data.quantile(0.25)
@@ -117,9 +119,9 @@ elif outlier=='IQR_trim':
     IQR = Q3 - Q1
     lower_bound = Q1 - 1.5 * IQR
     upper_bound = Q3 + 1.5 * IQR
-    X_scaled = np.clip(data, lower_bound, upper_bound)
+    numerical_Data = np.clip(numerical_Data, lower_bound, upper_bound)
 
-data.loc[:, numerical_Data.columns] = data
+data.loc[:, numerical_Data.columns] = numerical_Data
 
 
 ################ Transformation ##########################
@@ -135,14 +137,49 @@ Normalization_tech=Normalization_tech = {
 }
 Normalization_tech_choice=int(input("choose the normalization {0:'StandardScaler()',1:'MinMaxScaler()',2:'MaxAbsScaler()',3:'RobustScaler()',4:'Normalizer()',5:'QuantileTransformer()',6:'PowerTransformer():  "))
 
-    
+numerical_Data=data.select_dtypes(include=['number'])
+   
 scaler = Normalization_tech[Normalization_tech_choice]
-data_scaled = scaler.fit_transform(data)
+data_scaled = scaler.fit_transform(numerical_Data)
 
-print(data_scaled)
+data.loc[:, numerical_Data.columns] = data_scaled
+
+# skew handling techniques
+numerical_Data = data.select_dtypes(include=['number'])
+
+# skew handling techniques
+Skew_handling = {
+    0: lambda x: np.log(x + 1),             # Log transformation
+    1: lambda x: np.sqrt(x),                # Square root transformation
+    2: boxcox,                              # Box-Cox transformation
+    3: yeojohnson                           # Yeo-Johnson transformation
+}
+
+skew_handling_choice = int(input("Choose the skew handling technique:\n"
+                                 "0: Log transformation\n"
+                                 "1: Square root transformation\n"
+                                 "2: Box-Cox transformation\n"
+                                 "3: Yeo-Johnson transformation\n"
+                                 "Enter your choice: "))
+
+skew_handler = Skew_handling.get(skew_handling_choice)
+
+if skew_handler is not None:
+    transformed_features = numerical_Data.apply(lambda x: skew_handler(x) if np.issubdtype(x.dtype, np.number) else x)
+    print("Features after skew handling:")
+    print(transformed_features)
+    
+    data.loc[:, numerical_Data.columns] = transformed_features
+else:
+    print("Invalid choice for skew handling technique.")
+
 
 # Data Splitting
-y = data.iloc[:, -1]
+y_custom=input("Enter column name: ")
+if (y_custom!=''):
+    y=data.loc['y_custom']
+else:
+    y = data.iloc[:, -1]
 X = data.iloc[:, :-1]
 
 y_dtype = y.dtypes
@@ -155,19 +192,35 @@ if pd.api.types.is_categorical_dtype(y_dtype):
 else:
     modeltype = 1
 
-ordencod= OrdinalEncoder()
-x_encord=ordencod.fit_transform(X)
-X = x_encord
+# ordencod= OrdinalEncoder()
+# x_encord=ordencod.fit_transform(X)
+# X = x_encord
 
 if X.shape[1] == 1:
     X = X.values.reshape(-1, 1)
 
 
 
+############## PCA ####################
+numerical_features = X.select_dtypes(include=['number']).columns.tolist()
+categorical_features = X.select_dtypes(exclude=['number']).columns.tolist()
 
-# PCA
+# Define the transformer for categorical features
+categorical_transformer = Pipeline(steps=[
+    ('onehot', OneHotEncoder())])
+
+preprocessor = ColumnTransformer(
+    transformers=[
+        ('num', 'passthrough', numerical_features),  # 'passthrough' to keep numerical features unchanged
+        ('cat', categorical_transformer, categorical_features)])
+
+pca_n = 2
 pca = PCA(n_components=pca_n)
-x_pca = pca.fit_transform(X_scaled)
+
+pipeline = Pipeline(steps=[('preprocessor', preprocessor),
+                           ('pca', pca)])
+
+x_pca = pipeline.fit_transform(X)
 
 x_train, x_test, y_train, y_test = train_test_split(x_pca, y, test_size=test_size, random_state=42)
 
